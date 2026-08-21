@@ -1,0 +1,20 @@
+[package]
+name = "moonlite-client"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone MOON.lite router-aggregator sample client (quote -> swap -> EIP-712 sign -> submit)."
+
+# Dependency-light: reqwest (async HTTP) + serde_json (JSON) + alloy (signing, ABI, RPC).
+# alloy 2.4.1 is a meta-crate whose default features already include: a local
+# private-key signer, the sol! macro (sol-types), an HTTP provider, and contracts.
+# We run everything on one tokio runtime, so we use async reqwest (not blocking).
+[dependencies]
+alloy = { version = "2.4.1", features = ["signer-local"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
+
+[[bin]]
+name = "moonlite-client"
+path = "src/main.rs"

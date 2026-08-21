@@ -1,0 +1,14 @@
+target/
+node_modules/
+__pycache__/
+*.pyc
+.env
+Cargo.lock
+package-lock.json
+
+# local backups
+*.bak
+*.polishbak
+*.tokbak
+*.charsetbak
+*.healthbak
