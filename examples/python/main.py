@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+from decimal import Decimal
 
 import requests
 from eth_account import Account
@@ -34,7 +35,8 @@ from web3 import Web3
 CHAIN_ID = 5042002
 BASE_TOKEN = "0x3600000000000000000000000000000000000000"  # native USDC / gas token
 
-# Minimal ERC20 ABI: allowance + approve are all we need on the input token.
+# Minimal ERC20 ABI: allowance + approve + decimals. decimals() lets us parse and
+# display amounts correctly for any token (e.g. 6-decimal USDC), never assuming 18.
 ERC20_ABI = json.loads("""
 [
   {"name":"allowance","type":"function","stateMutability":"view",
@@ -42,7 +44,10 @@ ERC20_ABI = json.loads("""
    "outputs":[{"name":"","type":"uint256"}]},
   {"name":"approve","type":"function","stateMutability":"nonpayable",
    "inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],
-   "outputs":[{"name":"","type":"bool"}]}
+   "outputs":[{"name":"","type":"bool"}]},
+  {"name":"decimals","type":"function","stateMutability":"view",
+   "inputs":[],
+   "outputs":[{"name":"","type":"uint8"}]}
 ]
 """)
 
@@ -167,8 +172,13 @@ API_BASE = "https://api.moonlite.so"       # MOON.lite API base
 RPC_URL = "https://api.moonlite.so/rpc"    # Arc testnet wallet JSON-RPC
 TOKEN_IN = "0x3600000000000000000000000000000000000000"   # USDC (base / gas token)
 TOKEN_OUT = "0xa4a3f16fc8c1494accd1ae9ebf33cc45bda02275"  # JUN (sample ERC20)
-AMOUNT_IN = str(10**18)                    # 1e18 base units of TOKEN_IN
+AMOUNT = "1"                               # human-readable amount of TOKEN_IN to swap
 SLIPPAGE_BPS = 500                         # 5% - the router floors auth.minOut by this
+
+
+def fmt(value, dec):
+    """Format a base-unit integer amount as a human decimal string using `dec`."""
+    return f"{Decimal(int(value)) / (Decimal(10) ** dec):f}"
 
 
 def main():
@@ -177,16 +187,29 @@ def main():
     private_key = env("PRIVATE_KEY", required=True)   # SECRET -> env only
     token_in = TOKEN_IN
     token_out = TOKEN_OUT
-    amount_in = AMOUNT_IN
 
     acct = Account.from_key(private_key)
     trader = acct.address
+
+    # web3 client (used to read decimals/allowance/nonce/fees and to send the approve).
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+    # Fetch ERC20 decimals on-chain for BOTH tokens before quoting. Never assume 18:
+    # e.g. USDC is 6 decimals, so parsing/formatting must use the real value.
+    dec_in = w3.eth.contract(
+        address=Web3.to_checksum_address(token_in), abi=ERC20_ABI
+    ).functions.decimals().call()
+    dec_out = w3.eth.contract(
+        address=Web3.to_checksum_address(token_out), abi=ERC20_ABI
+    ).functions.decimals().call()
+
+    # Scale the human-readable AMOUNT into TOKEN_IN base units using its real decimals.
+    amount_in = str(int(Decimal(AMOUNT) * (Decimal(10) ** dec_in)))
+
     print(f"trader   : {trader}")
     print(f"api_base : {api_base}")
-    print(f"swap     : {amount_in} {token_in} -> {token_out}\n")
-
-    # web3 client (used to read allowance/nonce/fees and to send the approve).
-    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    print(f"decimals : in={dec_in} out={dec_out}")
+    print(f"swap     : {AMOUNT} ({amount_in} base units) {token_in} -> {token_out}\n")
 
     # Per-step timers (milliseconds). approve stays 0 if allowance already covers it.
     t_quote = t_swap = t_sign = t_approve = t_submit = 0.0
@@ -200,8 +223,8 @@ def main():
     quote = q.json()
     t_quote = (time.perf_counter() - _t0) * 1000
     print("=== /quote preview ===")
-    print(f"  amountIn      : {quote['amountIn']}")
-    print(f"  amountOut     : {quote['amountOut']}")
+    print(f"  amountIn      : {fmt(quote['amountIn'], dec_in)}")
+    print(f"  amountOut     : {fmt(quote['amountOut'], dec_out)}")
     print(f"  priceImpactBps: {quote['priceImpactBps']}")
     print(f"  feeBps        : {quote['feeBps']}\n")
 
@@ -222,9 +245,9 @@ def main():
     router_addr = Web3.to_checksum_address(swap["to"])
     print("=== /swap ===")
     print(f"  router (to): {router_addr}")
-    print(f"  grossOut   : {swap['grossOut']}")
-    print(f"  netOut     : {swap['netOut']}")
-    print(f"  minOut     : {auth['minOut']}  (slippage/round-trip protected)\n")
+    print(f"  grossOut   : {fmt(swap['grossOut'], dec_out)}")
+    print(f"  netOut     : {fmt(swap['netOut'], dec_out)}")
+    print(f"  minOut     : {fmt(auth['minOut'], dec_out)}  (slippage/round-trip protected)\n")
 
     # 3) EIP-712 sign the returned auth with the user's wallet key.
     _t0 = time.perf_counter()
@@ -246,7 +269,7 @@ def main():
         erc20 = w3.eth.contract(address=Web3.to_checksum_address(token_in), abi=ERC20_ABI)
         allowance = erc20.functions.allowance(trader, router_addr).call()
         if allowance < amount:
-            print(f"approving router for {amount} (current allowance {allowance})...")
+            print(f"approving router for {fmt(amount, dec_in)} (current allowance {fmt(allowance, dec_in)})...")
             tx = erc20.functions.approve(router_addr, amount).build_transaction({
                 "from": trader,
                 "nonce": w3.eth.get_transaction_count(trader),
@@ -257,7 +280,7 @@ def main():
             w3.eth.wait_for_transaction_receipt(ah)
             print(f"  approve tx: {ah.hex()}\n")
         else:
-            print(f"allowance ok ({allowance} >= {amount})\n")
+            print(f"allowance ok ({fmt(allowance, dec_in)} >= {fmt(amount, dec_in)})\n")
     t_approve = (time.perf_counter() - _t0) * 1000
 
     # 5) BUILD + locally SIGN the swapExactIn transaction, then POST the raw signed

@@ -21,6 +21,7 @@ import {
   http,
   getAddress,
   formatUnits,
+  parseUnits,
   encodeFunctionData,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -37,7 +38,7 @@ const CHAIN_ID = 5042002; // Arc testnet (0x4cef52)
 // BASE / native USDC (gas token) -> a sample ERC20 (JUN). Swap either via env.
 const TOKEN_IN = getAddress("0x3600000000000000000000000000000000000000"); // USDC (base / gas token)
 const TOKEN_OUT = getAddress("0xa4a3f16fc8c1494accd1ae9ebf33cc45bda02275"); // JUN (sample ERC20)
-const AMOUNT = "1000000000000000000"; // 1e18 base units of TOKEN_IN
+const AMOUNT = "1"; // human-readable amount of TOKEN_IN; scaled by fetched decimals
 const SLIPPAGE_BPS = 500; // 5% - the router floors auth.minOut by this
 const RECIPIENT = null; // null -> defaults to your own address
 
@@ -56,6 +57,9 @@ const ERC20_ABI = [
   { type: "function", name: "approve", stateMutability: "nonpayable",
     inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }],
     outputs: [{ type: "bool" }] },
+  { type: "function", name: "decimals", stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint8" }] },
 ];
 
 // auth tuple + hops[] tuple exactly as the router expects.
@@ -103,7 +107,7 @@ const EIP712_TYPES = {
 const chain = {
   id: CHAIN_ID,
   name: "Arc testnet",
-  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: [RPC_URL] } },
 };
 const account = privateKeyToAccount(PRIVATE_KEY);
@@ -118,7 +122,17 @@ async function api(path, init) {
 
 async function main() {
   console.log(`Trader ${account.address} on chain ${CHAIN_ID}`);
-  console.log(`Swapping ${AMOUNT} of ${TOKEN_IN} -> ${TOKEN_OUT}\n`);
+
+  // Fetch ERC-20 decimals on-chain for BOTH tokens before quoting; every amount
+  // parsed or displayed below is scaled by the correct token's decimals.
+  const [decIn, decOut] = await Promise.all([
+    publicClient.readContract({ address: TOKEN_IN, abi: ERC20_ABI, functionName: "decimals" }),
+    publicClient.readContract({ address: TOKEN_OUT, abi: ERC20_ABI, functionName: "decimals" }),
+  ]);
+  // Scale the human-readable AMOUNT into TOKEN_IN base units using its decimals.
+  const amountInBase = parseUnits(AMOUNT, decIn);
+  console.log(`decimals: tokenIn=${decIn} tokenOut=${decOut}`);
+  console.log(`Swapping ${AMOUNT} (${amountInBase} base units) of ${TOKEN_IN} -> ${TOKEN_OUT}\n`);
 
   // Per-step timers (ms). Filled in as we go; recapped at the end.
   const t = { quote: 0, swap: 0, sign: 0, approve: 0, submit: 0 };
@@ -127,7 +141,7 @@ async function main() {
   // 1) Quote (public, no auth) — just a preview.
   let s = performance.now();
   const quote = await api(
-    `/quote?tokenIn=${TOKEN_IN}&tokenOut=${TOKEN_OUT}&amount=${AMOUNT}`,
+    `/quote?tokenIn=${TOKEN_IN}&tokenOut=${TOKEN_OUT}&amount=${amountInBase}`,
   );
   t.quote = performance.now() - s;
   console.log("quote:", JSON.stringify(quote, null, 2), "\n");
@@ -141,7 +155,7 @@ async function main() {
     body: JSON.stringify({
       inputTokens: [TOKEN_IN],
       outputTokens: [TOKEN_OUT],
-      amount: AMOUNT,
+      amount: amountInBase.toString(),
       trader: account.address,
       recipient: RECIPIENT || account.address,
       slippageBps: SLIPPAGE_BPS,
@@ -151,7 +165,12 @@ async function main() {
   const { auth, hops, to, netOut, grossOut } = swap;
   const router = getAddress(to);
   console.log(`route -> router ${router}`);
-  console.log(`grossOut ${grossOut}  netOut ${netOut}  (minOut ${auth.minOut})\n`);
+  console.log(
+    `amountIn ${formatUnits(BigInt(auth.amountIn), decIn)}  ` +
+      `grossOut ${formatUnits(BigInt(grossOut), decOut)}  ` +
+      `netOut ${formatUnits(BigInt(netOut), decOut)}  ` +
+      `(minOut ${formatUnits(BigInt(auth.minOut), decOut)})\n`,
+  );
 
   // 3) Sign the SwapAuthorization via EIP-712 with the user`s wallet.
   //    verifyingContract MUST be the `to` the API returned.
@@ -250,7 +269,7 @@ async function main() {
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   console.log(`mined in block ${receipt.blockNumber}, status ${receipt.status}`);
-  console.log(`expected netOut ~ ${formatUnits(BigInt(netOut), 18)} tokenOut\n`);
+  console.log(`expected netOut ~ ${formatUnits(BigInt(netOut), decOut)} tokenOut\n`);
 
   // Timing recap.
   const total = performance.now() - t0;

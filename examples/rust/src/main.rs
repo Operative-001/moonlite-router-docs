@@ -21,6 +21,7 @@
 use alloy::consensus::TxEip1559;
 use alloy::eips::eip2718::Encodable2718;
 use alloy::network::TxSigner;
+use alloy::primitives::utils::{format_units, parse_units};
 use alloy::primitives::{Address, Bytes, FixedBytes, Signature, TxKind, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
@@ -77,12 +78,27 @@ sol! {
     #[allow(missing_docs)]
     #[sol(rpc)]
     contract Erc20 {
+        function decimals() external view returns (uint8);
         function allowance(address owner, address spender) external view returns (uint256);
         function approve(address spender, uint256 amount) external returns (bool);
     }
 }
 
 // -- small parse helpers ----------------------------------------------------------
+/// Format a base-unit amount from a JSON value (string or number) into a
+/// human-readable decimal string using the given on-chain token decimals.
+/// Falls back to the raw JSON rendering if the value can't be parsed as U256.
+fn fmt_amount(v: &serde_json::Value, decimals: u8) -> String {
+    let raw = match v.as_str() {
+        Some(s) => s.to_string(),
+        None => v.to_string(),
+    };
+    match U256::from_str(raw.trim_matches('"')) {
+        Ok(n) => format_units(n, decimals).unwrap_or(raw),
+        Err(_) => v.to_string(),
+    }
+}
+
 fn addr(s: &str) -> Result<Address> {
     Address::from_str(s.trim()).with_context(|| format!("bad address: {s}"))
 }
@@ -117,7 +133,7 @@ const API_BASE: &str = "https://api.moonlite.so";      // MOON.lite API base
 const RPC_URL: &str = "https://api.moonlite.so/rpc";   // Arc testnet wallet JSON-RPC
 const TOKEN_IN: &str = "0x3600000000000000000000000000000000000000";  // USDC (base / gas token)
 const TOKEN_OUT: &str = "0xa4a3f16fc8c1494accd1ae9ebf33cc45bda02275"; // JUN (sample ERC20)
-const AMOUNT_IN: &str = "1000000000000000000";         // 1e18 base units of TOKEN_IN
+const AMOUNT: &str = "1";                              // human-readable amount of TOKEN_IN; scaled by on-chain decimals
 const SLIPPAGE_BPS: u32 = 500;                         // 5% - router floors auth.minOut by this
 
 #[tokio::main]
@@ -128,7 +144,6 @@ async fn main() -> Result<()> {
     let pk = env::var("PRIVATE_KEY").context("PRIVATE_KEY env var is required")?; // SECRET -> env only
     let token_in = TOKEN_IN.to_string();
     let token_out = TOKEN_OUT.to_string();
-    let amount_in = AMOUNT_IN.to_string();
 
     let signer: PrivateKeySigner = pk.trim().parse().context("invalid PRIVATE_KEY")?;
     let trader = signer.address();
@@ -139,6 +154,29 @@ async fn main() -> Result<()> {
     // Timing accumulators — each numbered step is wrapped in its own timer and the
     // durations are printed as a recap block at the very end.
     let t_total = Instant::now();
+
+    // ---- provider (reads + approve + tx params) --------------------------------
+    // `connect_http` wants a parsed Url; reqwest::Url is the same `url::Url` alloy
+    // uses, so we parse into it explicitly to pin the type. Built up front because
+    // we need on-chain reads (token decimals) before quoting.
+    let rpc: reqwest::Url = rpc_url.parse().context("bad RPC_URL")?;
+    let provider = ProviderBuilder::new().connect_http(rpc);
+
+    // ---- token decimals (on-chain) ---------------------------------------------
+    // Never assume 18 decimals: fetch decimals() for BOTH tokens and use them for
+    // every parse/display of amounts (e.g. USDC is 6, not 18).
+    let erc20_in = Erc20::new(addr(&token_in)?, &provider);
+    let erc20_out = Erc20::new(addr(&token_out)?, &provider);
+    let dec_in = erc20_in.decimals().call().await.context("tokenIn decimals() read failed")?._0;
+    let dec_out = erc20_out.decimals().call().await.context("tokenOut decimals() read failed")?._0;
+    println!("decimals: tokenIn={dec_in} tokenOut={dec_out}");
+
+    // Scale the human-readable AMOUNT to TOKEN_IN base units using its decimals.
+    let amount_in_u256: U256 = parse_units(AMOUNT, dec_in)
+        .context("failed to parse AMOUNT with tokenIn decimals")?
+        .into();
+    let amount_in = amount_in_u256.to_string();
+    println!("amountIn = {AMOUNT} tokenIn ({amount_in} base units)");
 
     // ---- 1) quote preview -------------------------------------------------------
     let t_quote = Instant::now();
@@ -154,9 +192,10 @@ async fn main() -> Result<()> {
         .json()
         .await?;
     let ms_quote = t_quote.elapsed().as_millis();
+    let quote_in = fmt_amount(&quote["amountIn"], dec_in);
+    let quote_out = fmt_amount(&quote["amountOut"], dec_out);
     println!(
-        "quote: {} {} -> {} {}  (priceImpactBps={}, feeBps={})",
-        quote["amountIn"], token_in, quote["amountOut"], token_out,
+        "quote: {quote_in} {token_in} -> {quote_out} {token_out}  (priceImpactBps={}, feeBps={})",
         quote["priceImpactBps"], quote["feeBps"],
     );
 
@@ -187,7 +226,8 @@ async fn main() -> Result<()> {
     )?;
     println!(
         "swap: router={router}  grossOut={}  netOut={}",
-        swap["grossOut"], swap["netOut"]
+        fmt_amount(&swap["grossOut"], dec_out),
+        fmt_amount(&swap["netOut"], dec_out),
     );
 
     // Reconstruct the EIP-712 SwapAuthorization struct from the response `auth`.
@@ -241,11 +281,12 @@ async fn main() -> Result<()> {
     let signature = Bytes::from(sig65);
     let ms_sign = t_sign.elapsed().as_millis();
 
-    // ---- provider (reads + approve + tx params) --------------------------------
-    // `connect_http` wants a parsed Url; reqwest::Url is the same `url::Url` alloy
-    // uses, so we parse into it explicitly to pin the type.
-    let rpc: reqwest::Url = rpc_url.parse().context("bad RPC_URL")?;
-    let provider = ProviderBuilder::new().connect_http(rpc);
+    // Show the signed amounts using the correct per-side decimals (never 18).
+    println!(
+        "authorized: amountIn={} tokenIn  minOut={} tokenOut",
+        format_units(auth.amountIn, dec_in).unwrap_or_else(|_| auth.amountIn.to_string()),
+        format_units(auth.minOut, dec_out).unwrap_or_else(|_| auth.minOut.to_string()),
+    );
 
     // ---- 4) approve if allowance is short --------------------------------------
     // approve is NOT a swap, so we send it directly via the wallet RPC, not
@@ -256,7 +297,10 @@ async fn main() -> Result<()> {
     let current = erc20.allowance(trader, router).call().await
         .context("allowance() read failed")?;
     if current < auth.amountIn {
-        println!("approving {router} to spend {} of {token_in_addr}...", auth.amountIn);
+        println!(
+            "approving {router} to spend {} tokenIn of {token_in_addr}...",
+            format_units(auth.amountIn, dec_in).unwrap_or_else(|_| auth.amountIn.to_string()),
+        );
         // Build + sign + send the approve tx with the same local signer.
         let approve_calldata = Erc20::approveCall {
             spender: router,
