@@ -1,0 +1,13 @@
+{
+  "name": "moonlite-node-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal MOON.lite router-aggregator sample client: quote -> swap -> EIP-712 sign -> approve -> swapExactIn.",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  }
+}
