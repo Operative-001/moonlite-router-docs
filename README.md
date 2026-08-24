@@ -177,11 +177,11 @@ Copy-paste a complete round-trip client — **quote → EIP-712 sign → `swapEx
 
 The `/quote` and `/swap` HTTP plane above is **public and needs no key**. Building a
 whitelabel bot or a live-feed integration on top of MOON.lite? That real-time layer is
-**key-gated**, and getting a key takes one step:
+**key-gated**, and getting a key is a simple registration:
 
-1. **Register your integration** on the **[MOON.lite partners page](https://moonlite.so/partners.html)** — name, type, link, contact, and your **payout address**.
-2. Your **feed key is minted instantly**, one per payout address. Set it as the `ML_FEED_KEY` environment variable for the widget or bot — it's never shown in a URL.
-3. The key **activates once you route fees** to your payout address, and on a return visit the page shows it **masked** (with a reveal + copy) alongside your leaderboard rank.
+1. **Register your integration** on the **[MOON.lite partners page](https://moonlite.so/partners.html)** — name, type, link, contact, and your **payout address**. This puts you on the partner leaderboard.
+2. **MOON.lite issues one key per payout address**, provisioned for the address you registered and delivered through the contact you supplied — it's never put in a URL. Set it as the `ML_FEED_KEY` environment variable for the widget or bot.
+3. The key **activates once you route fees** to your payout address (once your integration does real volume).
 
 The open-source **[whitelabel Telegram + Discord bot](https://github.com/Operative-001/moonlite-bot)** is configured with that same `ML_FEED_KEY`.
 
@@ -211,7 +211,7 @@ The open-source **[whitelabel Telegram + Discord bot](https://github.com/Operati
 <details>
 <summary>❓ FAQ</summary>
 
-**Do I need an API key?** Not for trading — `/quote` and `/swap` are public. Only `/venues` is gated, and you don't need it to trade. The **real-time feed + whitelabel bot** plane *is* key-gated: register your integration at [moonlite.so/partners.html](https://moonlite.so/partners.html) to mint an `ML_FEED_KEY` instantly (one per payout address).
+**Do I need an API key?** Not for trading — `/quote` and `/swap` are public. Only `/venues` is gated, and you don't need it to trade. The **real-time feed + whitelabel bot** plane *is* key-gated: register your integration at [moonlite.so/partners.html](https://moonlite.so/partners.html) with your payout address to get an `ML_FEED_KEY` (one key per payout address).
 
 **Where does slippage come from?** You set it — `slippageBps` on `POST /swap`. The router bakes it into the signed `minOut`.
 
