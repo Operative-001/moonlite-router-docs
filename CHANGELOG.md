@@ -5,7 +5,7 @@ All notable changes to the MOON.lite public interface (API + sample clients) are
 ## [Unreleased]
 
 ### Added
-- **Real-time feed & whitelabel bots** onboarding — documented how to get a feed key (`ML_FEED_KEY` / `x-ml-key`): register your integration on the partners page with your payout address; MOON.lite issues one key per payout address, and it activates once you route fees. Links to the open-source whitelabel Telegram + Discord bot.
+- **Real-time feed & whitelabel bots** onboarding docs — documented the shipped flow: `/quote` + `/swap` are public, while the real-time feed + execution plane is key-gated via `ML_FEED_KEY` / `x-ml-key`. Registering your integration on the partners page with your payout address records a pending partner and puts you on the leaderboard; **self-serve feed-key issuance is not live yet**, so `ML_FEED_KEY`s are provisioned directly by MOON.lite for now. Links to the open-source whitelabel Telegram + Discord bot.
 
 ## [0.1.0-beta] — 2026-08-21
 

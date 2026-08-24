@@ -177,13 +177,13 @@ Copy-paste a complete round-trip client — **quote → EIP-712 sign → `swapEx
 
 The `/quote` and `/swap` HTTP plane above is **public and needs no key**. Building a
 whitelabel bot or a live-feed integration on top of MOON.lite? That real-time layer is
-**key-gated**, and getting a key is a simple registration:
+**key-gated**. Here's how onboarding works today:
 
-1. **Register your integration** on the **[MOON.lite partners page](https://moonlite.so/partners.html)** — name, type, link, contact, and your **payout address**. This puts you on the partner leaderboard.
-2. **MOON.lite issues one key per payout address**, provisioned for the address you registered and delivered through the contact you supplied — it's never put in a URL. Set it as the `ML_FEED_KEY` environment variable for the widget or bot.
-3. The key **activates once you route fees** to your payout address (once your integration does real volume).
+1. **Register your integration** on the **[MOON.lite partners page](https://moonlite.so/partners.html)** — name, type, link, and your **payout address**. Submitting `POST`s to `/partners/register`, which records your integration as a **pending partner** (it returns `{"ok":true}`) and puts your payout address on the partner leaderboard.
+2. **Self-serve feed-key issuance is not live yet.** Registering does not itself mint, deliver, or reveal a key — there is no shipped issue-and-deliver path. Until self-serve issuance ships, `ML_FEED_KEY`s are **provisioned directly by MOON.lite** for operators running a real integration. Register first, then coordinate with MOON.lite for a key.
+3. Once you have a key, set it as the `ML_FEED_KEY` environment variable for the widget or bot. It is a secret — never placed in a URL or query string.
 
-The open-source **[whitelabel Telegram + Discord bot](https://github.com/Operative-001/moonlite-bot)** is configured with that same `ML_FEED_KEY`.
+The open-source **[whitelabel Telegram + Discord bot](https://github.com/Operative-001/moonlite-bot)** reads that same `ML_FEED_KEY` from the environment.
 
 ---
 
@@ -211,7 +211,7 @@ The open-source **[whitelabel Telegram + Discord bot](https://github.com/Operati
 <details>
 <summary>❓ FAQ</summary>
 
-**Do I need an API key?** Not for trading — `/quote` and `/swap` are public. Only `/venues` is gated, and you don't need it to trade. The **real-time feed + whitelabel bot** plane *is* key-gated: register your integration at [moonlite.so/partners.html](https://moonlite.so/partners.html) with your payout address to get an `ML_FEED_KEY` (one key per payout address).
+**Do I need an API key?** Not for trading — `/quote` and `/swap` are public. Only `/venues` is gated, and you don't need it to trade. The **real-time feed + whitelabel bot** plane *is* key-gated. Register your integration at [moonlite.so/partners.html](https://moonlite.so/partners.html) with your payout address to get on the partner leaderboard; note that **self-serve `ML_FEED_KEY` issuance is not live yet** — feed keys are provisioned directly by MOON.lite for now.
 
 **Where does slippage come from?** You set it — `slippageBps` on `POST /swap`. The router bakes it into the signed `minOut`.
 
