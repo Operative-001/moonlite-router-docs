@@ -2,6 +2,11 @@
 
 All notable changes to the MOON.lite public interface (API + sample clients) are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **Real-time feed & whitelabel bots** onboarding — documented how to get a feed key (`ML_FEED_KEY` / `x-ml-key`): register your integration on the partners page to mint one instantly (one per payout address), it activates once you route fees, and it is shown masked on return. Links to the open-source whitelabel Telegram + Discord bot.
+
 ## [0.1.0-beta] — 2026-08-21
 
 First public beta of the MOON.lite router-aggregator interface for **Arc testnet** (chainId `5042002`).
